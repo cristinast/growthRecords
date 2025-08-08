@@ -1,13 +1,13 @@
-const express = require("express");
-const cors = require("cors");
-const req = require("express/lib/request");
-const res = require("express/lib/response");
-const sqlite3 = require("sqlite3").verbose();
+const express = require('express');
+const cors = require('cors');
+const sqlite3 = require('sqlite3').verbose();
+const multer = require('multer');
+const path = require('path');
 const app = express();
 const port = 3001;
 
 app.use(cors());
-app.use(express.json());
+app.use('/uploads', express.static('uploads'));
 
 
 // データベース接続
@@ -19,8 +19,17 @@ db.run(`CREATE TABLE IF NOT EXISTS growth_records(
     date TEXT,
     height REAL,
     weight REAL,
-    memo TEXT
+    memo TEXT,
+    photo TEXT
 )`);
+
+// 写真アップロードの設定
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => cb(null, 'uploads/'),
+    filename: (req, file, cb) => cb(null, Date.now() + path.extname(file))
+});
+
+const upload = multer({ storage });
 
 // 記録取得
 app.get('/api/records', (req, res) => {
@@ -30,10 +39,12 @@ app.get('/api/records', (req, res) => {
 });
 
 // 記録追加
-app.post('/api/records', (req, res) => {
+app.post('/api/records', upload.single('photo'), (req, res) => {
     const { date, height, weight, memo } = req.body;
-    db.run("INSERT INTO growth_records(date, height, weight, memo) VALUES (?, ?, ?, ?)",
-        [date, height, weight, memo], function (err) {
+    const photo = req.file ? `/uploads/${req.file.filename}` : null;
+    db.run("INSERT INTO growth_records(date, height, weight, memo, photo) VALUES (?, ?, ?, ?, ?)",
+        [date, height, weight, memo, photo],
+        function (err) {
             if (err) return res.status(500).json({ error: err.message });
             res.json({ id: this.lastID });
         });
