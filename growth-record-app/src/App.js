@@ -13,6 +13,9 @@ import {
   Pagination,
 } from "@mui/material";
 
+import { LocalizationProvider, DatePicker } from '@mui/x-date-pickers';
+import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
+
 const PAGE_SIZE = 10;
 
 function App() {
@@ -35,9 +38,20 @@ function App() {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
 
+  const handleDateChange = (newDate) => {
+    if (newDate) {
+      const yyyy = newDate.getFullYear();
+      const mm = String(newDate.getMonth() + 1).padStart(2, '0');
+      const dd = String(newDate.getDate()).padStart(2, '0');
+      setForm({ ...form, date: `${yyyy}-${mm}-${dd}` });
+    } else {
+      setForm({ ...form, date: "" });
+    }
+  };
+
   const handlePhotoChange = e => {
     setPhoto(e.target.files[0]);
-  }
+  };
 
   const handleSubmit = e => {
     e.preventDefault();
@@ -75,13 +89,24 @@ function App() {
         </Typography>
         <Box component="form" onSubmit={handleSubmit} encType="multipart/form-data" sx={{ mt: 4 }}>
           <Stack spacing={2}>
-            <TextField
+            {/* <TextField
               label="日付"
               name="date"
               type="date"
               value={form.date}
               onChange={handleChange}
-              required />
+              required /> */}
+
+              <LocalizationProvider dateAdapter={AdapterDateFns}>
+              <DatePicker
+                label="日付"
+                value={form.date ? newDate(form.date) :null}
+                onChange={handleChange}
+                renderInput={(params) => <TextField {...params} required name="date"/>}
+                inputFormat="yyyy-MM-dd"
+                mask="____-__-__"
+              />
+              </LocalizationProvider>
             <TextField
               label="身長(cm)"
               name="height"
@@ -135,8 +160,6 @@ function App() {
             <Pagination count={pageCount} page={page} onChange={handlePageChange} color="primary" />
           </Box>
         )}
-
-
       </Paper>
     </Container>
   );
