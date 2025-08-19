@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useLanguage } from './contexts/LanguageContext';
 import {
   Container,
   Typography,
@@ -18,93 +19,149 @@ import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 
 const PAGE_SIZE = 10;
 
-function App() {
+function GrowthRecord({ token }) {
+  const { t } = useLanguage();
   const [records, setRecords] = useState([]);
-  const [form, setForm] = useState({ date: "", height: "", weight: "", memo: "" });
+  const [form, setForm] = useState({ date: null, height: "", weight: "", memo: "" });
   const [photo, setPhoto] = useState(null);
+  const [existingPhoto, setExistingPhoto] = useState(null);
   const [page, setPage] = useState(1);
+  const [accountId, setAccountId] = useState(null);
   const [editId, setEditId] = useState(null);
 
-  const fetchRecords = () => {
-    fetch('http://localhost:3001/api/records')
+  const fetchAccount = () => {
+    fetch('http://localhost:3001/api/accounts', {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
       .then(res => res.json())
-      .then(data => setRecords(data));
+      .then(data => {
+        if (Array.isArray(data) && data.length > 0) {
+          setAccountId(data[0].id);
+        }
+      })
+      .catch(error => console.error('Account fetch error:', error));
+  };
+
+  const fetchRecords = () => {
+    if (!accountId) return;
+    fetch(`http://localhost:3001/api/records/${accountId}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    })
+      .then(res => res.json())
+      .then(data => setRecords(data))
+      .catch(error => console.error('Records fetch error:', error));
   };
 
   useEffect(() => {
-    fetchRecords();
-  }, []);
+    if (token) fetchAccount();
+  }, [token]);
+
+  useEffect(() => {
+    if (accountId) fetchRecords();
+  }, [accountId]);
 
   const handleChange = e => {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
-
-  const handleDateChange = (newDate) => {
-    if (newDate) {
-      const yyyy = newDate.getFullYear();
-      const mm = String(newDate.getMonth() + 1).padStart(2, '0');
-      const dd = String(newDate.getDate()).padStart(2, '0');
-      setForm({ ...form, date: `${yyyy}-${mm}-${dd}` });
-    } else {
-      setForm({ ...form, date: "" });
-    }
+  
+  const handleDateChange = newDate => {
+    setForm({ ...form, date: newDate });
   };
 
   const handlePhotoChange = e => {
     setPhoto(e.target.files[0]);
   };
 
-  // 編集ボタン
+  // 編集ボタン処理
   const handleEdit = (record) => {
     setEditId(record.id);
     setForm({
-      date: record.date,
-      height: record.height,
-      weight: record.weight,
-      memo: record.memo,
+      date: record.date ? new Date(record.date) : null,
+      height: record.height.toString(),
+      weight: record.weight.toString(),
+      memo: record.memo
     });
     setPhoto(null);
+    setExistingPhoto(record.photo);
   };
 
-  // 削除ボタン
+  // 編集キャンセル
+  const handleCancelEdit = () => {
+    setEditId(null);
+    setForm({ date: null, height: "", weight: "", memo: "" });
+    setPhoto(null);
+    setExistingPhoto(null);
+  };
+
+  // 削除ボタン処理
   const handleDelete = (id) => {
     fetch(`http://localhost:3001/api/records/${id}`, {
       method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
     }).then(() => {
       fetchRecords();
-    });
+    }).catch(error => console.error('Record delete error:', error));
   };
 
-  // 送信（新規　or 編集）
+  // 送信処理（新規追加 or 編集）
   const handleSubmit = e => {
     e.preventDefault();
     const formData = new FormData();
-    formData.append('date', form.date);
+    
+    if (!editId) {
+      formData.append('account_id', accountId);
+    }
+    
+    if (form.date) {
+      const yyyy = form.date.getFullYear();
+      const mm = String(form.date.getMonth() + 1).padStart(2, '0');
+      const dd = String(form.date.getDate()).padStart(2, '0');
+      formData.append('date', `${yyyy}-${mm}-${dd}`);
+    }
     formData.append('height', form.height);
     formData.append('weight', form.weight);
     formData.append('memo', form.memo);
-    if (photo) formData.append('photo', photo);
+    if (photo) {
+      formData.append('photo', photo);
+    } else if (editId && existingPhoto) {
+      formData.append('existingPhoto', existingPhoto);
+    }
+
+    // 編集か新規かで処理を分岐
     if (editId) {
       // 編集
       fetch(`http://localhost:3001/api/records/${editId}`, {
         method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
         body: formData
       }).then(() => {
         setEditId(null);
-        setForm({ date: '', height: '', weight: '', memo: '' });
+        setForm({ date: null, height: '', weight: '', memo: '' });
         setPhoto(null);
+        setExistingPhoto(null);
         fetchRecords();
-      });
+      }).catch(error => console.error('Record update error:', error));
     } else {
-      // 新規
-      fetch('http://localhost:3001/api/records', {
+      // 新規追加
+      fetch(`http://localhost:3001/api/records`, {
         method: 'POST',
-        body: formData,
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
       }).then(() => {
-        setForm({ date: '', height: '', weight: '', memo: '' });
+        setForm({ date: null, height: '', weight: '', memo: '' });
         setPhoto(null);
         fetchRecords();
-      });
+      }).catch(error => console.error('Record add error:', error));
     }
   };
 
@@ -120,13 +177,13 @@ function App() {
     <Container maxWidth="sm">
       <Paper elevation={4} sx={{ p: 4, mt: 4 }}>
         <Typography variant="h4" align="center" gutterBottom color="primary">
-          成長記録
+          {t('growthRecord')}
         </Typography>
         <Box component="form" onSubmit={handleSubmit} encType="multipart/form-data" sx={{ mt: 4 }}>
           <Stack spacing={2}>
             <LocalizationProvider dateAdapter={AdapterDateFns}>
               <DatePicker
-                label="日付"
+                label={t('date')}
                 value={form.date ? new Date(form.date) : null}
                 onChange={handleDateChange}
                 slotProps={{
@@ -139,34 +196,58 @@ function App() {
               />
             </LocalizationProvider>
             <TextField
-              label="身長(cm)"
+              label={t('height')}
               name="height"
               type="number"
+              inputProps={{ step: "0.1", min: "0" }}
               value={form.height}
               onChange={handleChange}
               required />
             <TextField
-              label="体重(kg)"
+              label={t('weight')}
               name="weight"
               type="number"
+              inputProps={{ step: "0.1", min: "0" }}
               value={form.weight}
               onChange={handleChange} required
             />
             <TextField
-              label="メモ"
+              label={t('memo')}
               name="memo"
               type="text"
               value={form.memo}
               onChange={handleChange}
               required
             />
-            <Button variant="contained" component="label">
-              写真選択
+            <Button variant="contained" component="label" sx={{ bgcolor: '#7FB3D3', '&:hover': { bgcolor: '#5499C7' } }}>
+              {t('selectPhoto')}
               <input name="photo" type="file" accept="image/*" onChange={handlePhotoChange} hidden />
             </Button>
-            <Button type="submit" variant="contained" color="primary" size="large">
-              記録追加
-            </Button>
+            {/* 画像プレビュー */}
+            {(photo || (editId && existingPhoto)) && (
+              <Box sx={{ mt: 1 }}>
+                <Typography variant="body2" color="textSecondary">{t('currentPhoto')}:</Typography>
+                <img 
+                  src={photo ? URL.createObjectURL(photo) : `http://localhost:3001${existingPhoto}`} 
+                  alt={t('photoPreview')}
+                  style={{ width: "100px", borderRadius: "8px", border: "1px solid #ccc", marginTop: "8px" }}
+                />
+              </Box>
+            )}
+            {editId ? (
+              <Stack direction="row" spacing={2}>
+                <Button type="submit" variant="contained" size="large" sx={{ bgcolor: '#5DADE2', '&:hover': { bgcolor: '#5499C7' } }}>
+                  {t('update')}
+                </Button>
+                <Button variant="outlined" onClick={handleCancelEdit} size="large" sx={{ color: '#5DADE2', borderColor: '#5DADE2', '&:hover': { borderColor: '#5499C7', color: '#5499C7' } }}>
+                  {t('cancel')}
+                </Button>
+              </Stack>
+            ) : (
+              <Button type="submit" variant="contained" size="large" sx={{ bgcolor: '#5DADE2', '&:hover': { bgcolor: '#5499C7' } }}>
+                {t('addRecord')}
+              </Button>
+            )}
           </Stack>
         </Box>
         <Box sx={{ maxHeight: 400, overflow: "auto", mt: 2 }}>
@@ -177,20 +258,57 @@ function App() {
                   secondary={r.memo} />
                 {r.photo && (
                   <Box sx={{ ml: 2 }}>
-                    <img src={`http://localhost:3001${r.photo}`} alt="記録写真"
+                    <img src={`http://localhost:3001${r.photo}`} alt={t('recordPhoto')}
                       style={{ width: "80px", borderRadius: "8px", border: "1px solid #ccc" }}
                     />
                   </Box>
                 )}
-                <Button color="primary" size="small" onClick={() => handleEdit(r)}>編集</Button>
-                <Button color="error" size="small" onClick={() => handleDelete(r.id)}>削除</Button>
+                <Box sx={{ ml: 1 }}>
+                  <Button 
+                    size="small" 
+                    variant="outlined"
+                    onClick={() => handleEdit(r)}
+                    sx={{ 
+                      mr: 1, 
+                      color: '#5DADE2', 
+                      borderColor: '#5DADE2', 
+                      '&:hover': { borderColor: '#5499C7', color: '#5499C7', bgcolor: 'rgba(93, 173, 226, 0.04)' } 
+                    }}
+                  >
+                    {t('edit')}
+                  </Button>
+                  <Button 
+                    color="error" 
+                    size="small" 
+                    variant="outlined"
+                    onClick={() => handleDelete(r.id)}
+                  >
+                    {t('delete')}
+                  </Button>
+                </Box>
               </ListItem>
             ))}
           </List>
         </Box>
         {pageCount > 1 && (
           <Box display="flex" justifyContent="center" mt={2}>
-            <Pagination count={pageCount} page={page} onChange={handlePageChange} color="primary" />
+            <Pagination 
+              count={pageCount} 
+              page={page} 
+              onChange={handlePageChange} 
+              sx={{
+                '& .MuiPaginationItem-root': {
+                  color: '#5DADE2'
+                },
+                '& .MuiPaginationItem-root.Mui-selected': {
+                  backgroundColor: '#5DADE2',
+                  color: 'white',
+                  '&:hover': {
+                    backgroundColor: '#5499C7'
+                  }
+                }
+              }}
+            />
           </Box>
         )}
       </Paper>
@@ -198,4 +316,4 @@ function App() {
   );
 }
 
-export default App;
+export default GrowthRecord;
