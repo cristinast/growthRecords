@@ -3,6 +3,7 @@ const cors = require('cors');
 const sqlite3 = require('sqlite3').verbose();
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const app = express();
@@ -235,10 +236,31 @@ app.get('/api/records/:account_id', authenticateToken, (req, res) => {
 // 記録削除
 app.delete('/api/records/:id', authenticateToken, (req, res) => {
     const id = req.params.id;
-    db.run("DELETE FROM growth_records WHERE id = ?", [id], function (err) {
+    
+    // まず削除対象のレコードの写真パスを取得
+    db.get("SELECT photo FROM growth_records WHERE id = ?", [id], (err, row) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json({ result: "削除完了" });
-    })
+        
+        // レコードを削除
+        db.run("DELETE FROM growth_records WHERE id = ?", [id], function (err) {
+            if (err) return res.status(500).json({ error: err.message });
+            
+            // 写真ファイルが存在する場合は削除
+            if (row && row.photo) {
+                const photoPath = path.join(__dirname, row.photo);
+                fs.unlink(photoPath, (err) => {
+                    if (err) {
+                        console.error('写真ファイル削除エラー:', err);
+                        // ファイル削除に失敗してもレコード削除は成功として扱う
+                    } else {
+                        console.log('写真ファイルを削除しました:', photoPath);
+                    }
+                });
+            }
+            
+            res.json({ result: "削除完了" });
+        });
+    });
 });
 
 // 記録更新
@@ -246,24 +268,53 @@ app.put('/api/records/:id', authenticateToken, upload.single('photo'), (req, res
     const id = req.params.id;
     const { date, height, weight, memo, existingPhoto } = req.body;
     
-    let photo;
-    if (req.file) {
-        // 新しい画像がアップロードされた場合
-        photo = `/uploads/${req.file.filename}`;
-    } else if (existingPhoto) {
-        // 既存の画像を保持する場合
-        photo = existingPhoto;
-    } else {
-        // 画像がない場合
-        photo = null;
-    }
-    
-    db.run("UPDATE growth_records SET date = ?, height = ?, weight = ?, memo = ?, photo = ? WHERE id = ?",
-        [date, height, weight, memo, photo, id],
-        function (err) {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ result: "更新完了" });
-        });
+    // まず既存のレコードの写真パスを取得
+    db.get("SELECT photo FROM growth_records WHERE id = ?", [id], (err, row) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        let photo;
+        let oldPhotoToDelete = null;
+        
+        if (req.file) {
+            // 新しい画像がアップロードされた場合
+            photo = `/uploads/${req.file.filename}`;
+            // 既存の写真があれば削除対象に設定
+            if (row && row.photo && row.photo !== photo) {
+                oldPhotoToDelete = row.photo;
+            }
+        } else if (existingPhoto) {
+            // 既存の画像を保持する場合
+            photo = existingPhoto;
+        } else {
+            // 画像がない場合
+            photo = null;
+            // 既存の写真があれば削除対象に設定
+            if (row && row.photo) {
+                oldPhotoToDelete = row.photo;
+            }
+        }
+        
+        // レコードを更新
+        db.run("UPDATE growth_records SET date = ?, height = ?, weight = ?, memo = ?, photo = ? WHERE id = ?",
+            [date, height, weight, memo, photo, id],
+            function (err) {
+                if (err) return res.status(500).json({ error: err.message });
+                
+                // 古い写真ファイルを削除
+                if (oldPhotoToDelete) {
+                    const oldPhotoPath = path.join(__dirname, oldPhotoToDelete);
+                    fs.unlink(oldPhotoPath, (err) => {
+                        if (err) {
+                            console.error('古い写真ファイル削除エラー:', err);
+                        } else {
+                            console.log('古い写真ファイルを削除しました:', oldPhotoPath);
+                        }
+                    });
+                }
+                
+                res.json({ result: "更新完了" });
+            });
+    });
 });
 
 // プロフィール更新
@@ -272,38 +323,62 @@ app.put('/api/profile', authenticateToken, upload.single('avatar'), (req, res) =
     const avatar = req.file ? `/uploads/${req.file.filename}` : null;
     const userId = req.user.id;
     
-    // ユーザー名とメールアドレスの重複チェック（自分以外）
-    db.get("SELECT * FROM users WHERE (username = ? OR email = ?) AND id != ?", 
-        [username, email, userId], (err, existingUser) => {
-            if (err) return res.status(500).json({ error: err.message });
-            if (existingUser) {
-                return res.status(400).json({ error: 'ユーザー名またはメールアドレスは既に使用されています' });
-            }
-            
-            // アバター画像がアップロードされた場合の更新クエリ
-            let query, params;
-            if (avatar) {
-                query = "UPDATE users SET username = ?, email = ?, avatar = ? WHERE id = ?";
-                params = [username, email, avatar, userId];
-            } else {
-                query = "UPDATE users SET username = ?, email = ? WHERE id = ?";
-                params = [username, email, userId];
-            }
-            
-            db.run(query, params, function (err) {
+    // まず既存のユーザー情報を取得
+    db.get("SELECT avatar FROM users WHERE id = ?", [userId], (err, currentUser) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        // ユーザー名とメールアドレスの重複チェック（自分以外）
+        db.get("SELECT * FROM users WHERE (username = ? OR email = ?) AND id != ?", 
+            [username, email, userId], (err, existingUser) => {
                 if (err) return res.status(500).json({ error: err.message });
+                if (existingUser) {
+                    return res.status(400).json({ error: 'ユーザー名またはメールアドレスは既に使用されています' });
+                }
                 
-                // 更新されたユーザー情報を返す
-                db.get("SELECT id, username, email, avatar FROM users WHERE id = ?", [userId], (err, updatedUser) => {
+                let oldAvatarToDelete = null;
+                
+                // 新しいアバターがアップロードされた場合、古いアバターを削除対象に設定
+                if (avatar && currentUser && currentUser.avatar && currentUser.avatar !== avatar) {
+                    oldAvatarToDelete = currentUser.avatar;
+                }
+                
+                // アバター画像がアップロードされた場合の更新クエリ
+                let query, params;
+                if (avatar) {
+                    query = "UPDATE users SET username = ?, email = ?, avatar = ? WHERE id = ?";
+                    params = [username, email, avatar, userId];
+                } else {
+                    query = "UPDATE users SET username = ?, email = ? WHERE id = ?";
+                    params = [username, email, userId];
+                }
+                
+                db.run(query, params, function (err) {
                     if (err) return res.status(500).json({ error: err.message });
                     
-                    res.json({ 
-                        message: 'プロフィールが正常に更新されました',
-                        user: updatedUser
+                    // 古いアバターファイルを削除
+                    if (oldAvatarToDelete) {
+                        const oldAvatarPath = path.join(__dirname, oldAvatarToDelete);
+                        fs.unlink(oldAvatarPath, (err) => {
+                            if (err) {
+                                console.error('古いアバターファイル削除エラー:', err);
+                            } else {
+                                console.log('古いアバターファイルを削除しました:', oldAvatarPath);
+                            }
+                        });
+                    }
+                    
+                    // 更新されたユーザー情報を返す
+                    db.get("SELECT id, username, email, avatar FROM users WHERE id = ?", [userId], (err, updatedUser) => {
+                        if (err) return res.status(500).json({ error: err.message });
+                        
+                        res.json({ 
+                            message: 'プロフィールが正常に更新されました',
+                            user: updatedUser
+                        });
                     });
                 });
             });
-        });
+    });
 });
 
 app.listen(port, () => {
